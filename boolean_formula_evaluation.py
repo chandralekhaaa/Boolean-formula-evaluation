@@ -1,102 +1,107 @@
-!unzip "/content/hw3_part2_data.zip"
+!unzip "/content/hw3_part1_data.zip"
 
-!pip install imageio
+import os
+import csv
+import numpy as np
 
-import matplotlib.pyplot as plt
-import matplotlib.image as img
-import imageio as iio
+data = {}
+data_path = "/content/all_data"
+count = 0
+for data_file in os.listdir(data_path):
+  count+=1
+  print(count, data_file)
+  with open(data_path+"/"+data_file, "r", errors="ignore") as f:
+    file_content = csv.reader(f, delimiter=',')
+    data_set = []
+    for line in file_content:
+      data_set.append(list(map(int, line)))
+  if "train" in data_file:
+    data_set_name = data_file.replace("train_", "").replace(".csv", "")
+    if data_set_name not in data:
+      data[data_set_name] = {}
+    data[data_set_name]["train"] = data_set
+  elif "valid" in data_file:
+    data_set_name = data_file.replace("valid_", "").replace(".csv", "")
+    if data_set_name not in data:
+      data[data_set_name] = {}
+    data[data_set_name]["validation"] = data_set
+  elif "test" in data_file:
+    data_set_name = data_file.replace("test_", "").replace(".csv", "")
+    if data_set_name not in data:
+      data[data_set_name] = {}
+    data[data_set_name]["test"] = data_set
 
-def load_image(file_path):
-  image = iio.imread(file_path)
-  image = image /255
-  return image
+#Splitting the features and the class
+processed_data = {}
+for data_set in data.keys():
+  processed_data[data_set] = {}
+  for data_set_type in data[data_set].keys():
+    row_length = len(data[data_set][data_set_type][0])
+    data[data_set][data_set_type] = np.array(data[data_set][data_set_type])
+    processed_data[data_set][data_set_type + "_X"] = data[data_set][data_set_type][:,0:row_length - 1]
+    processed_data[data_set][data_set_type + "_y"] = data[data_set][data_set_type][:,row_length - 1]
 
-def initialize(image, clusters):
-  image_array = np.reshape(image, (image.shape[0]*image.shape[1], image.shape[2]))
-  nrows, ncolumns = image_array.shape
-  centroids = np.zeros((clusters, ncolumns))
+print(processed_data)
 
-  for i in range(clusters):
-    rand1 = int(np.random.random(1)*10)
-    rand2 = int(np.random.random(1)*7)
-    centroids[i,0] = image_array[rand1, 0]
-    centroids[i,2] = image_array[rand2, 0]
-  
-  return image_array, centroids
+#Decision Tree Classifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn import metrics 
 
-def euclidean_distance(x1, y1, x2, y2):      
-    return np.sqrt(np.square(x1 - x2) + np.square(y1 - y2))
+params = {"max_depth" : [6, 8, 10, 12, 14, 20, 25], "criterion" : [ "gini", "entropy"], "splitter" : ["best", "random"], "max_features" : ["auto", "sqrt", "log2"], "min_samples_split" : [2, 5, 10, 15], "min_samples_leaf" : [1, 2, 5, 10] }
 
-def kmeans(image_array, centroids, clusters):
-  iterations = 10
-  nrows, ncolumns = image_array.shape
-  index = np.zeros(nrows)
-  for i in range(iterations):
-    for j in range(len(image_array)):
-      min_distance = 1000
-      for k in range(clusters):
-        x1 = image_array[j,0]
-        y1 = image_array[j,1]
-        x2 = centroids[k,0]
-        y2 = centroids[k,1]
-        if(euclidean_distance(x1,y1,x2,y2)<min_distance):
-          min_distance = euclidean_distance(x1,y1,x2,y2)
-          index[j] = k
-  for k in range(clusters):
-    sum_x = 0
-    sum_y = 0
-    count = 0
-    for j in range(len(image_array)):
-      if(index[j] == k):
-        sum_x += image_array[j,0]
-        sum_y += image_array[j,1]
-        count += 1
-  if(count == 0):
-    count = 1
-  centroids[k,0] = float(sum_x/count)
-  centroids[k,1] = float(sum_y/count)
-  return centroids, index
+for data_set in processed_data.keys():
+  t_clf = GridSearchCV(DecisionTreeClassifier(), params, cv = 2)
+  t_clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  tuned_parameters = t_clf.best_params_
+  print(data_set, t_clf.best_params_,end="\n")
+  clf = DecisionTreeClassifier(max_depth = tuned_parameters["max_depth"], criterion = tuned_parameters["criterion"], splitter = tuned_parameters["splitter"], max_features=tuned_parameters["max_features"], min_samples_split= tuned_parameters["min_samples_split"], min_samples_leaf = tuned_parameters["min_samples_leaf"])
+  clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  processed_data[data_set]["test_y_pred"] = clf.predict(processed_data[data_set]["test_X"])
+  print(metrics.classification_report(processed_data[data_set]["test_y"], processed_data[data_set]["test_y_pred"]))
 
-def compress(centroids, index, image, file_prefix, cluster, initialization):
-  centroids = np.array(centroids)
-  compressed_image = centroids[index.astype(int), :]
-  compressed_image = np.reshape(compressed_image, image.shape)
-  plt.imshow(compressed_image)
-  plt.show()
-  iio.imsave(os.getcwd()+"compressed_"+ file_prefix + str(cluster) + "_" + str(initialization), compressed_image, format="jpg")
+from sklearn.ensemble import BaggingClassifier 
 
-def stats(original_image_path, compressed_image_path):
-  org_image = os.stat(original_image_path)
-  compressed_image = os.stat(compressed_image_path)
-  return (org_image.st_size / float(compressed_image.st_size))
+params = {"bootstrap" : [True, False], "bootstrap_features" : [True, False], "max_features" : [15, 20, 25, 30, 35]}
 
-original_image_path_Koala = "/content/Koala.jpg"
-original_image_path_Penguins = "/content/Penguins.jpg"
+for data_set in processed_data.keys():
+  t_clf = GridSearchCV(BaggingClassifier(), params, cv = 2)
+  t_clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  tuned_parameters = t_clf.best_params_
+  print(data_set, tuned_parameters,end="\n")
+  clf = BaggingClassifier(bootstrap=tuned_parameters["bootstrap"], bootstrap_features = tuned_parameters["bootstrap_features"], max_features = tuned_parameters["max_features"])
+  clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  processed_data[data_set]["test_y_pred"] = clf.predict(processed_data[data_set]["test_X"])
+  print(metrics.classification_report(processed_data[data_set]["test_y"], processed_data[data_set]["test_y_pred"]))
 
-for cluster in [15, 20]:
-  compression_ratios = []
-  for initialization in range(1,6):
-    print("Number of clusters:", cluster, "Initialization:", initialization)
-    image = load_image("original_image_path_Koala")
-    image_array, centroids = initialize(image, cluster)
-    centroids, index = kmeans(image_array, centroids, cluster)
-    compressed_image = compress(centroids, index, image, "Koala",cluster, initialization)
-    ratio = stats(original_image_path_Koala, os.getcwd()+"compressed_"+ "Koala" + str(cluster) + "_" + str(initialization))
-    print("Compression ratio:", ratio)
-    compression_ratios.append(ratio)
-  print("Average:", np.mean(compression_ratios))
-  print("Variance:", np.var(compression_ratios))
+from sklearn.ensemble import RandomForestClassifier 
+params = {"max_depth" : [6, 8, 10, 12, 14, 20, 25], "criterion" : [ "gini", "entropy"], "max_features" : ["auto", "sqrt", "log2"], "min_samples_split" : [2, 5, 10, 15], "min_samples_leaf" : [1, 2, 5, 10] }
 
-for cluster in [2, 5, 10, 15, 20]:
-  compression_ratios = []
-  for initialization in range(1,6):
-    print("Number of clusters:", cluster, "Initialization:", initialization)
-    image = load_image(original_image_path_Penguins)
-    image_array, centroids = initialize(image, cluster)
-    centroids, index = kmeans(image_array, centroids, cluster)
-    compressed_image = compress(centroids, index, image, "Penguins", cluster, initialization)
-    ratio = stats(original_image_path_Penguins, os.getcwd()+"compressed_"+ "Penguins" + str(cluster) + "_" + str(initialization))
-    print("Compression ratio:", ratio)
-    compression_ratios.append(ratio)
-  print("Average:", np.mean(compression_ratios))
-  print("Variance:", np.var(compression_ratios))
+for data_set in processed_data.keys():
+  t_clf = GridSearchCV(RandomForestClassifier(), params, cv = 2)
+  t_clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  tuned_parameters = t_clf.best_params_
+  print(data_set, tuned_parameters,end="\n")
+  clf = RandomForestClassifier(max_depth = tuned_parameters["max_depth"], criterion = tuned_parameters["criterion"], max_features=tuned_parameters["max_features"], min_samples_split= tuned_parameters["min_samples_split"], min_samples_leaf = tuned_parameters["min_samples_leaf"])
+  clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  processed_data[data_set]["test_y_pred"] = clf.predict(processed_data[data_set]["test_X"])
+  print(metrics.classification_report(processed_data[data_set]["test_y"], processed_data[data_set]["test_y_pred"]))
+
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn import metrics
+
+params = {"loss" : ["exponential", "deviance"], "criterion" : [ "friedman_mse", "squared_error"], "max_depth" : [3, 5, 7, 9], "min_samples_leaf" : [1, 2, 5, 10] }
+
+temp = ['c1800_d5000', 'c1500_d100', 'c1800_d100', 'c500_d1000', 'c1000_d1000']
+
+for data_set in temp:
+  #data_set = "c500_d100"
+  t_clf = GridSearchCV(GradientBoostingClassifier(), params, cv = 2, verbose=True, n_jobs=4)
+  t_clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  tuned_parameters = t_clf.best_params_
+  print(data_set, tuned_parameters,end="\n")
+  clf = GradientBoostingClassifier(loss = tuned_parameters["loss"], criterion = tuned_parameters["criterion"], max_depth= tuned_parameters["max_depth"], min_samples_leaf = tuned_parameters["min_samples_leaf"])
+  clf.fit(processed_data[data_set]["train_X"] + processed_data[data_set]["validation_X"], processed_data[data_set]["train_y"] + processed_data[data_set]["validation_y"])
+  processed_data[data_set]["test_y_pred"] = clf.predict(processed_data[data_set]["test_X"])
+  print(metrics.classification_report(processed_data[data_set]["test_y"], processed_data[data_set]["test_y_pred"]))
